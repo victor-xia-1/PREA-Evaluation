@@ -1,0 +1,46 @@
+# R specific
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+*.Rproj
+*.Rproj.user
+
+# Data files (large Excel files, CSV outputs)
+*.xlsx
+*.xls
+*.csv
+data/raw/*
+data/clean/*
+!data/clean/.gitkeep
+
+# Output figures (can be regenerated)
+figures/*
+!figures/.gitkeep
+
+# Temporary files
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
+
+# PDFs (if you have large PDF files)
+*.pdf
+
+# HTML outputs (can be regenerated)
+*.html
+
+# LaTeX outputs
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.bbl
+*.blg
+
+# Keep directory structure
+!data/raw/.gitkeep
+!data/clean/.gitkeep
+!figures/.gitkeep
+
