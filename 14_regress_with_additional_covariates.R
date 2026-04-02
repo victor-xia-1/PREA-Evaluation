@@ -230,7 +230,6 @@ cat("  staff_per_1000_inmates:", sum(is.na(merged_panel$staff_per_1000_inmates))
 cat("  population_millions:", sum(is.na(merged_panel$population_millions)), "\n")
 cat("  incarceration_rate_per_100k:", sum(is.na(merged_panel$incarceration_rate_per_100k)), "\n")
 cat("  violent_crime_rate_per_100k:", sum(is.na(merged_panel$violent_crime_rate_per_100k)), "\n")
-cat("  cumulative_years_compliance:", sum(is.na(merged_panel$cumulative_years_compliance)), "\n")
 
 # Create cumulative years of PREA compliance (scalar)
 # This counts how many years a state has been compliant up to and including the current year
@@ -239,15 +238,29 @@ merged_panel <- merged_panel %>%
   arrange(state, year) %>%
   group_by(state) %>%
   mutate(
-    cumulative_years_compliance = cumsum(ifelse(is.na(prea_compliant), 0, prea_compliant))
+    cumulative_years_compliance = cumsum(ifelse(is.na(prea_compliant), 0, prea_compliant)),
+    # Ever treated by year t: 1 once a state has ever been compliant up to t
+    EverTreated = as.integer(cummax(ifelse(is.na(prea_compliant), 0L, prea_compliant)) > 0L),
+    # Lag outcomes (t-1)
+    alleged_per_1000_tminus1 = dplyr::lag(alleged_per_1000, n = 1),
+    substantiated_per_1000_tminus1 = dplyr::lag(substantiated_per_1000, n = 1),
+    # Lag outcomes (t-2)
+    alleged_per_1000_tminus2 = dplyr::lag(alleged_per_1000, n = 2),
+    substantiated_per_1000_tminus2 = dplyr::lag(substantiated_per_1000, n = 2),
+    # Lead outcomes (t+1)
+    alleged_per_1000_tplus1 = dplyr::lead(alleged_per_1000, n = 1),
+    substantiated_per_1000_tplus1 = dplyr::lead(substantiated_per_1000, n = 1)
   ) %>%
   ungroup()
 
 cat("\nCreated cumulative years of PREA compliance variable.\n")
+cat("Created EverTreated indicator (ever compliant up to year t).\n")
 cat("Cumulative years of compliance summary:\n")
 print(summary(merged_panel$cumulative_years_compliance))
 cat("\nCumulative years distribution:\n")
 print(table(merged_panel$cumulative_years_compliance, useNA = "ifany"))
+cat("\nEverTreated distribution:\n")
+print(table(merged_panel$EverTreated, useNA = "ifany"))
 
 # ============================================================================
 # PANEL REGRESSION MODELS WITH TWO-WAY FIXED EFFECTS
@@ -376,6 +389,637 @@ print(comparison_table)
 # Save comparison table
 write_csv(comparison_table, file.path(output_data_dir, "regression_comparison_twfe_cumulative_2012_2020.csv"))
 
+# ============================================================================
+# TWFE WITH LAGGED OUTCOMES (outcome in t-1)
+# ============================================================================
+cat("\n=== TWFE with lagged outcomes (outcome in t-1) ===\n")
+
+twfe_lag_data <- merged_panel %>%
+  filter(!is.na(alleged_per_1000_tminus1) | !is.na(substantiated_per_1000_tminus1))
+
+model_alleged_tminus1 <- lm(
+  alleged_per_1000_tminus1 ~ cumulative_years_compliance + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = twfe_lag_data
+)
+
+model_substantiated_tminus1 <- lm(
+  substantiated_per_1000_tminus1 ~ cumulative_years_compliance + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = twfe_lag_data
+)
+
+vcov_alleged_tminus1 <- vcovCL(model_alleged_tminus1, cluster = ~state, type = "HC1")
+vcov_substantiated_tminus1 <- vcovCL(model_substantiated_tminus1, cluster = ~state, type = "HC1")
+
+coeftest_alleged_tminus1 <- coeftest(model_alleged_tminus1, vcov = vcov_alleged_tminus1)
+coeftest_substantiated_tminus1 <- coeftest(model_substantiated_tminus1, vcov = vcov_substantiated_tminus1)
+
+cat("\nTWFE (t-1) Alleged per 1000:\n")
+print(coeftest_alleged_tminus1)
+cat("\nTWFE (t-1) Substantiated per 1000:\n")
+print(coeftest_substantiated_tminus1)
+
+results_alleged_tminus1 <- data.frame(
+  term = rownames(coeftest_alleged_tminus1),
+  estimate = coeftest_alleged_tminus1[, "Estimate"],
+  std.error = coeftest_alleged_tminus1[, "Std. Error"],
+  statistic = coeftest_alleged_tminus1[, "t value"],
+  p.value = coeftest_alleged_tminus1[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(!str_detect(term, "^factor\\(state\\)"),
+         !str_detect(term, "^factor\\(year\\)"))
+
+results_substantiated_tminus1 <- data.frame(
+  term = rownames(coeftest_substantiated_tminus1),
+  estimate = coeftest_substantiated_tminus1[, "Estimate"],
+  std.error = coeftest_substantiated_tminus1[, "Std. Error"],
+  statistic = coeftest_substantiated_tminus1[, "t value"],
+  p.value = coeftest_substantiated_tminus1[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(!str_detect(term, "^factor\\(state\\)"),
+         !str_detect(term, "^factor\\(year\\)"))
+
+write_csv(results_alleged_tminus1, file.path(output_data_dir, "regression_alleged_panel_twfe_cumulative_tminus1_2012_2020.csv"))
+write_csv(results_substantiated_tminus1, file.path(output_data_dir, "regression_substantiated_panel_twfe_cumulative_tminus1_2012_2020.csv"))
+
+comparison_table_tminus1 <- results_alleged_tminus1 %>%
+  rename(
+    Alleged_tminus1_Coef = estimate,
+    Alleged_tminus1_SE = std.error,
+    Alleged_tminus1_P = p.value
+  ) %>%
+  inner_join(
+    results_substantiated_tminus1 %>%
+      rename(
+        Substantiated_tminus1_Coef = estimate,
+        Substantiated_tminus1_SE = std.error,
+        Substantiated_tminus1_P = p.value
+      ),
+    by = "term"
+  ) %>%
+  rename(Variable = term)
+
+write_csv(comparison_table_tminus1, file.path(output_data_dir, "regression_comparison_twfe_cumulative_tminus1_2012_2020.csv"))
+cat("Saved TWFE t-1 outputs to data/clean.\n")
+
+# ============================================================================
+# TWFE WITH LAGGED OUTCOMES (outcome in t-2)
+# ============================================================================
+cat("\n=== TWFE with lagged outcomes (outcome in t-2) ===\n")
+
+twfe_lag2_data <- merged_panel %>%
+  filter(!is.na(alleged_per_1000_tminus2) | !is.na(substantiated_per_1000_tminus2))
+
+model_alleged_tminus2 <- lm(
+  alleged_per_1000_tminus2 ~ cumulative_years_compliance + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = twfe_lag2_data
+)
+
+model_substantiated_tminus2 <- lm(
+  substantiated_per_1000_tminus2 ~ cumulative_years_compliance + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = twfe_lag2_data
+)
+
+vcov_alleged_tminus2 <- vcovCL(model_alleged_tminus2, cluster = ~state, type = "HC1")
+vcov_substantiated_tminus2 <- vcovCL(model_substantiated_tminus2, cluster = ~state, type = "HC1")
+
+coeftest_alleged_tminus2 <- coeftest(model_alleged_tminus2, vcov = vcov_alleged_tminus2)
+coeftest_substantiated_tminus2 <- coeftest(model_substantiated_tminus2, vcov = vcov_substantiated_tminus2)
+
+cat("\nTWFE (t-2) Alleged per 1000:\n")
+print(coeftest_alleged_tminus2)
+cat("\nTWFE (t-2) Substantiated per 1000:\n")
+print(coeftest_substantiated_tminus2)
+
+results_alleged_tminus2 <- data.frame(
+  term = rownames(coeftest_alleged_tminus2),
+  estimate = coeftest_alleged_tminus2[, "Estimate"],
+  std.error = coeftest_alleged_tminus2[, "Std. Error"],
+  statistic = coeftest_alleged_tminus2[, "t value"],
+  p.value = coeftest_alleged_tminus2[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(!str_detect(term, "^factor\\(state\\)"),
+         !str_detect(term, "^factor\\(year\\)"))
+
+results_substantiated_tminus2 <- data.frame(
+  term = rownames(coeftest_substantiated_tminus2),
+  estimate = coeftest_substantiated_tminus2[, "Estimate"],
+  std.error = coeftest_substantiated_tminus2[, "Std. Error"],
+  statistic = coeftest_substantiated_tminus2[, "t value"],
+  p.value = coeftest_substantiated_tminus2[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(!str_detect(term, "^factor\\(state\\)"),
+         !str_detect(term, "^factor\\(year\\)"))
+
+write_csv(results_alleged_tminus2, file.path(output_data_dir, "regression_alleged_panel_twfe_cumulative_tminus2_2012_2020.csv"))
+write_csv(results_substantiated_tminus2, file.path(output_data_dir, "regression_substantiated_panel_twfe_cumulative_tminus2_2012_2020.csv"))
+
+comparison_table_tminus2 <- results_alleged_tminus2 %>%
+  rename(
+    Alleged_tminus2_Coef = estimate,
+    Alleged_tminus2_SE = std.error,
+    Alleged_tminus2_P = p.value
+  ) %>%
+  inner_join(
+    results_substantiated_tminus2 %>%
+      rename(
+        Substantiated_tminus2_Coef = estimate,
+        Substantiated_tminus2_SE = std.error,
+        Substantiated_tminus2_P = p.value
+      ),
+    by = "term"
+  ) %>%
+  rename(Variable = term)
+
+write_csv(comparison_table_tminus2, file.path(output_data_dir, "regression_comparison_twfe_cumulative_tminus2_2012_2020.csv"))
+cat("Saved TWFE t-2 outputs to data/clean.\n")
+
+# Helper for weak-IV robust Anderson-Rubin inference (single instrument)
+ar_test_grid <- function(data, y_var, x_var, z_var, beta_grid) {
+  pvals <- sapply(beta_grid, function(b0) {
+    fml <- as.formula(paste0(
+      "I(", y_var, " - (", b0, ")*", x_var, ") ~ ",
+      z_var, " + population_millions + incarceration_rate_per_100k + ",
+      "staff_per_1000_inmates + violent_crime_rate_per_100k + factor(state) + factor(year)"
+    ))
+    m <- lm(fml, data = data)
+    v <- vcovCL(m, cluster = ~state, type = "HC1")
+    ct <- coeftest(m, vcov = v)
+    as.numeric(ct[z_var, "Pr(>|t|)"])
+  })
+  data.frame(beta0 = beta_grid, ar_p_value = pvals, stringsAsFactors = FALSE)
+}
+
+ar_intervals <- function(ar_df, alpha = 0.05) {
+  accepted <- ar_df$ar_p_value > alpha
+  if (!any(accepted)) return(data.frame(lower = NA_real_, upper = NA_real_))
+  idx <- which(accepted)
+  splits <- c(0, which(diff(idx) > 1), length(idx))
+  out <- vector("list", length(splits) - 1)
+  for (k in seq_len(length(splits) - 1)) {
+    seg_idx <- idx[(splits[k] + 1):splits[k + 1]]
+    out[[k]] <- data.frame(
+      lower = min(ar_df$beta0[seg_idx]),
+      upper = max(ar_df$beta0[seg_idx])
+    )
+  }
+  bind_rows(out)
+}
+
+# ============================================================================
+# IV APPROACH:
+# Instrument cumulative_years_compliance with EverTreated (up to year t)
+# ============================================================================
+cat("\n=== IV Models (2SLS): cumulative_years_compliance instrumented by EverTreated ===\n")
+
+# Use a consistent complete-case dataset for IV stages
+iv_data <- merged_panel %>%
+  filter(complete.cases(
+    cumulative_years_compliance, EverTreated, population_millions,
+    incarceration_rate_per_100k, staff_per_1000_inmates, violent_crime_rate_per_100k,
+    state, year
+  ))
+
+cat("IV complete-case observations:", nrow(iv_data), "\n")
+
+# First stage: effect of EverTreated on cumulative years compliance
+first_stage <- lm(
+  cumulative_years_compliance ~ EverTreated + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = iv_data
+)
+vcov_first_stage <- vcovCL(first_stage, cluster = ~state, type = "HC1")
+coeftest_first_stage <- coeftest(first_stage, vcov = vcov_first_stage)
+
+cat("\nFirst stage (dependent variable: cumulative_years_compliance):\n")
+print(coeftest_first_stage["EverTreated", , drop = FALSE])
+fs_fstat <- as.numeric(coeftest_first_stage["EverTreated", "t value"])^2
+cat("Approx. first-stage F-stat (EverTreated, clustered):", round(fs_fstat, 3), "\n")
+if (is.finite(fs_fstat) && fs_fstat < 10) {
+  cat("WARNING: Potential weak instrument in baseline IV (F < 10).\n")
+}
+
+# Manual 2SLS implementation (dependency-free):
+# Stage 1 already estimated above; use fitted values as instrumented regressor.
+merged_panel_iv <- iv_data %>%
+  mutate(cumulative_years_hat = fitted(first_stage))
+
+# Second stage (2SLS) for alleged and substantiated outcomes
+iv_model_alleged <- lm(
+  alleged_per_1000 ~ cumulative_years_hat + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = merged_panel_iv
+)
+
+iv_model_substantiated <- lm(
+  substantiated_per_1000 ~ cumulative_years_hat + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = merged_panel_iv
+)
+
+vcov_iv_alleged <- vcovCL(iv_model_alleged, cluster = ~state, type = "HC1")
+vcov_iv_substantiated <- vcovCL(iv_model_substantiated, cluster = ~state, type = "HC1")
+
+coeftest_iv_alleged <- coeftest(iv_model_alleged, vcov = vcov_iv_alleged)
+coeftest_iv_substantiated <- coeftest(iv_model_substantiated, vcov = vcov_iv_substantiated)
+
+cat("\nIV regression: Alleged per 1000\n")
+print(coeftest_iv_alleged[c("cumulative_years_hat",
+                            "population_millions",
+                            "incarceration_rate_per_100k",
+                            "staff_per_1000_inmates",
+                            "violent_crime_rate_per_100k"), , drop = FALSE])
+
+cat("\nIV regression: Substantiated per 1000\n")
+print(coeftest_iv_substantiated[c("cumulative_years_hat",
+                                  "population_millions",
+                                  "incarceration_rate_per_100k",
+                                  "staff_per_1000_inmates",
+                                  "violent_crime_rate_per_100k"), , drop = FALSE])
+
+# Save IV results
+results_first_stage <- data.frame(
+  term = rownames(coeftest_first_stage),
+  estimate = coeftest_first_stage[, "Estimate"],
+  std.error = coeftest_first_stage[, "Std. Error"],
+  statistic = coeftest_first_stage[, "t value"],
+  p.value = coeftest_first_stage[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(term == "EverTreated")
+
+results_iv_alleged <- data.frame(
+  term = rownames(coeftest_iv_alleged),
+  estimate = coeftest_iv_alleged[, "Estimate"],
+  std.error = coeftest_iv_alleged[, "Std. Error"],
+  statistic = coeftest_iv_alleged[, "t value"],
+  p.value = coeftest_iv_alleged[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(term %in% c("cumulative_years_hat",
+                     "population_millions",
+                     "incarceration_rate_per_100k",
+                     "staff_per_1000_inmates",
+                     "violent_crime_rate_per_100k"))
+
+results_iv_substantiated <- data.frame(
+  term = rownames(coeftest_iv_substantiated),
+  estimate = coeftest_iv_substantiated[, "Estimate"],
+  std.error = coeftest_iv_substantiated[, "Std. Error"],
+  statistic = coeftest_iv_substantiated[, "t value"],
+  p.value = coeftest_iv_substantiated[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(term %in% c("cumulative_years_hat",
+                     "population_millions",
+                     "incarceration_rate_per_100k",
+                     "staff_per_1000_inmates",
+                     "violent_crime_rate_per_100k"))
+
+write_csv(results_first_stage, file.path(output_data_dir, "first_stage_ever_treated_to_cumulative_2012_2020.csv"))
+write_csv(results_iv_alleged, file.path(output_data_dir, "iv_alleged_cumulative_on_ever_treated_2012_2020.csv"))
+write_csv(results_iv_substantiated, file.path(output_data_dir, "iv_substantiated_cumulative_on_ever_treated_2012_2020.csv"))
+
+iv_comparison <- results_iv_alleged %>%
+  rename(
+    Alleged_Coef = estimate,
+    Alleged_SE = std.error,
+    Alleged_t = statistic,
+    Alleged_P = p.value
+  ) %>%
+  inner_join(
+    results_iv_substantiated %>%
+      rename(
+        Substantiated_Coef = estimate,
+        Substantiated_SE = std.error,
+        Substantiated_t = statistic,
+        Substantiated_P = p.value
+      ),
+    by = "term"
+  ) %>%
+  rename(Variable = term)
+
+write_csv(iv_comparison, file.path(output_data_dir, "iv_comparison_cumulative_on_ever_treated_2012_2020.csv"))
+cat("\nSaved IV outputs to data/clean.\n")
+
+# ============================================================================
+# IV APPROACH WITH LEAD OUTCOMES (outcome in t+1)
+# ============================================================================
+cat("\n=== IV Models with lead outcomes (outcome in t+1) ===\n")
+
+iv_data_lead <- merged_panel %>%
+  filter(complete.cases(
+    cumulative_years_compliance, EverTreated, population_millions,
+    incarceration_rate_per_100k, staff_per_1000_inmates, violent_crime_rate_per_100k,
+    alleged_per_1000_tplus1, substantiated_per_1000_tplus1, state, year
+  ))
+
+cat("IV lead-outcome complete-case observations:", nrow(iv_data_lead), "\n")
+
+first_stage_lead <- lm(
+  cumulative_years_compliance ~ EverTreated + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = iv_data_lead
+)
+vcov_first_stage_lead <- vcovCL(first_stage_lead, cluster = ~state, type = "HC1")
+coeftest_first_stage_lead <- coeftest(first_stage_lead, vcov = vcov_first_stage_lead)
+
+cat("\nFirst stage on lead sample (dependent variable: cumulative_years_compliance):\n")
+print(coeftest_first_stage_lead["EverTreated", , drop = FALSE])
+fs_fstat_lead <- as.numeric(coeftest_first_stage_lead["EverTreated", "t value"])^2
+cat("Approx. first-stage F-stat (EverTreated, clustered, lead sample):", round(fs_fstat_lead, 3), "\n")
+if (is.finite(fs_fstat_lead) && fs_fstat_lead < 10) {
+  cat("WARNING: Potential weak instrument in lead-outcome IV (F < 10).\n")
+}
+
+iv_data_lead <- iv_data_lead %>%
+  mutate(cumulative_years_hat = fitted(first_stage_lead))
+
+iv_model_alleged_lead <- lm(
+  alleged_per_1000_tplus1 ~ cumulative_years_hat + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = iv_data_lead
+)
+
+iv_model_substantiated_lead <- lm(
+  substantiated_per_1000_tplus1 ~ cumulative_years_hat + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = iv_data_lead
+)
+
+vcov_iv_alleged_lead <- vcovCL(iv_model_alleged_lead, cluster = ~state, type = "HC1")
+vcov_iv_substantiated_lead <- vcovCL(iv_model_substantiated_lead, cluster = ~state, type = "HC1")
+
+coeftest_iv_alleged_lead <- coeftest(iv_model_alleged_lead, vcov = vcov_iv_alleged_lead)
+coeftest_iv_substantiated_lead <- coeftest(iv_model_substantiated_lead, vcov = vcov_iv_substantiated_lead)
+
+cat("\nIV regression with outcome in t+1: Alleged per 1000\n")
+print(coeftest_iv_alleged_lead[c("cumulative_years_hat",
+                                 "population_millions",
+                                 "incarceration_rate_per_100k",
+                                 "staff_per_1000_inmates",
+                                 "violent_crime_rate_per_100k"), , drop = FALSE])
+
+cat("\nIV regression with outcome in t+1: Substantiated per 1000\n")
+print(coeftest_iv_substantiated_lead[c("cumulative_years_hat",
+                                       "population_millions",
+                                       "incarceration_rate_per_100k",
+                                       "staff_per_1000_inmates",
+                                       "violent_crime_rate_per_100k"), , drop = FALSE])
+
+results_first_stage_lead <- data.frame(
+  term = rownames(coeftest_first_stage_lead),
+  estimate = coeftest_first_stage_lead[, "Estimate"],
+  std.error = coeftest_first_stage_lead[, "Std. Error"],
+  statistic = coeftest_first_stage_lead[, "t value"],
+  p.value = coeftest_first_stage_lead[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(term == "EverTreated")
+
+results_iv_alleged_lead <- data.frame(
+  term = rownames(coeftest_iv_alleged_lead),
+  estimate = coeftest_iv_alleged_lead[, "Estimate"],
+  std.error = coeftest_iv_alleged_lead[, "Std. Error"],
+  statistic = coeftest_iv_alleged_lead[, "t value"],
+  p.value = coeftest_iv_alleged_lead[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(term %in% c("cumulative_years_hat",
+                     "population_millions",
+                     "incarceration_rate_per_100k",
+                     "staff_per_1000_inmates",
+                     "violent_crime_rate_per_100k"))
+
+results_iv_substantiated_lead <- data.frame(
+  term = rownames(coeftest_iv_substantiated_lead),
+  estimate = coeftest_iv_substantiated_lead[, "Estimate"],
+  std.error = coeftest_iv_substantiated_lead[, "Std. Error"],
+  statistic = coeftest_iv_substantiated_lead[, "t value"],
+  p.value = coeftest_iv_substantiated_lead[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(term %in% c("cumulative_years_hat",
+                     "population_millions",
+                     "incarceration_rate_per_100k",
+                     "staff_per_1000_inmates",
+                     "violent_crime_rate_per_100k"))
+
+write_csv(results_first_stage_lead, file.path(output_data_dir, "first_stage_ever_treated_to_cumulative_lead_outcome_2012_2020.csv"))
+write_csv(results_iv_alleged_lead, file.path(output_data_dir, "iv_alleged_tplus1_cumulative_on_ever_treated_2012_2020.csv"))
+write_csv(results_iv_substantiated_lead, file.path(output_data_dir, "iv_substantiated_tplus1_cumulative_on_ever_treated_2012_2020.csv"))
+
+iv_comparison_lead <- results_iv_alleged_lead %>%
+  rename(
+    Alleged_tplus1_Coef = estimate,
+    Alleged_tplus1_SE = std.error,
+    Alleged_tplus1_t = statistic,
+    Alleged_tplus1_P = p.value
+  ) %>%
+  inner_join(
+    results_iv_substantiated_lead %>%
+      rename(
+        Substantiated_tplus1_Coef = estimate,
+        Substantiated_tplus1_SE = std.error,
+        Substantiated_tplus1_t = statistic,
+        Substantiated_tplus1_P = p.value
+      ),
+    by = "term"
+  ) %>%
+  rename(Variable = term)
+
+write_csv(iv_comparison_lead, file.path(output_data_dir, "iv_comparison_tplus1_cumulative_on_ever_treated_2012_2020.csv"))
+cat("Saved IV lead-outcome outputs to data/clean.\n")
+
+# ============================================================================
+# IV APPROACH WITH LAG OUTCOMES (outcome in t-1)
+# ============================================================================
+cat("\n=== IV Models with lag outcomes (outcome in t-1) ===\n")
+
+iv_data_lag <- merged_panel %>%
+  filter(complete.cases(
+    cumulative_years_compliance, EverTreated, population_millions,
+    incarceration_rate_per_100k, staff_per_1000_inmates, violent_crime_rate_per_100k,
+    alleged_per_1000_tminus1, substantiated_per_1000_tminus1, state, year
+  ))
+
+cat("IV lag-outcome complete-case observations:", nrow(iv_data_lag), "\n")
+
+first_stage_lag <- lm(
+  cumulative_years_compliance ~ EverTreated + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = iv_data_lag
+)
+vcov_first_stage_lag <- vcovCL(first_stage_lag, cluster = ~state, type = "HC1")
+coeftest_first_stage_lag <- coeftest(first_stage_lag, vcov = vcov_first_stage_lag)
+
+cat("\nFirst stage on lag sample (dependent variable: cumulative_years_compliance):\n")
+print(coeftest_first_stage_lag["EverTreated", , drop = FALSE])
+fs_fstat_lag <- as.numeric(coeftest_first_stage_lag["EverTreated", "t value"])^2
+cat("Approx. first-stage F-stat (EverTreated, clustered, lag sample):", round(fs_fstat_lag, 3), "\n")
+if (is.finite(fs_fstat_lag) && fs_fstat_lag < 10) {
+  cat("WARNING: Potential weak instrument in lag-outcome IV (F < 10).\n")
+}
+
+iv_data_lag <- iv_data_lag %>%
+  mutate(cumulative_years_hat = fitted(first_stage_lag))
+
+iv_model_alleged_lag <- lm(
+  alleged_per_1000_tminus1 ~ cumulative_years_hat + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = iv_data_lag
+)
+
+iv_model_substantiated_lag <- lm(
+  substantiated_per_1000_tminus1 ~ cumulative_years_hat + population_millions +
+    incarceration_rate_per_100k + staff_per_1000_inmates +
+    violent_crime_rate_per_100k + factor(state) + factor(year),
+  data = iv_data_lag
+)
+
+vcov_iv_alleged_lag <- vcovCL(iv_model_alleged_lag, cluster = ~state, type = "HC1")
+vcov_iv_substantiated_lag <- vcovCL(iv_model_substantiated_lag, cluster = ~state, type = "HC1")
+
+coeftest_iv_alleged_lag <- coeftest(iv_model_alleged_lag, vcov = vcov_iv_alleged_lag)
+coeftest_iv_substantiated_lag <- coeftest(iv_model_substantiated_lag, vcov = vcov_iv_substantiated_lag)
+
+cat("\nIV regression with outcome in t-1: Alleged per 1000\n")
+print(coeftest_iv_alleged_lag[c("cumulative_years_hat",
+                                "population_millions",
+                                "incarceration_rate_per_100k",
+                                "staff_per_1000_inmates",
+                                "violent_crime_rate_per_100k"), , drop = FALSE])
+
+cat("\nIV regression with outcome in t-1: Substantiated per 1000\n")
+print(coeftest_iv_substantiated_lag[c("cumulative_years_hat",
+                                      "population_millions",
+                                      "incarceration_rate_per_100k",
+                                      "staff_per_1000_inmates",
+                                      "violent_crime_rate_per_100k"), , drop = FALSE])
+
+results_first_stage_lag <- data.frame(
+  term = rownames(coeftest_first_stage_lag),
+  estimate = coeftest_first_stage_lag[, "Estimate"],
+  std.error = coeftest_first_stage_lag[, "Std. Error"],
+  statistic = coeftest_first_stage_lag[, "t value"],
+  p.value = coeftest_first_stage_lag[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(term == "EverTreated")
+
+results_iv_alleged_lag <- data.frame(
+  term = rownames(coeftest_iv_alleged_lag),
+  estimate = coeftest_iv_alleged_lag[, "Estimate"],
+  std.error = coeftest_iv_alleged_lag[, "Std. Error"],
+  statistic = coeftest_iv_alleged_lag[, "t value"],
+  p.value = coeftest_iv_alleged_lag[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(term %in% c("cumulative_years_hat",
+                     "population_millions",
+                     "incarceration_rate_per_100k",
+                     "staff_per_1000_inmates",
+                     "violent_crime_rate_per_100k"))
+
+results_iv_substantiated_lag <- data.frame(
+  term = rownames(coeftest_iv_substantiated_lag),
+  estimate = coeftest_iv_substantiated_lag[, "Estimate"],
+  std.error = coeftest_iv_substantiated_lag[, "Std. Error"],
+  statistic = coeftest_iv_substantiated_lag[, "t value"],
+  p.value = coeftest_iv_substantiated_lag[, "Pr(>|t|)"],
+  stringsAsFactors = FALSE
+) %>%
+  filter(term %in% c("cumulative_years_hat",
+                     "population_millions",
+                     "incarceration_rate_per_100k",
+                     "staff_per_1000_inmates",
+                     "violent_crime_rate_per_100k"))
+
+write_csv(results_first_stage_lag, file.path(output_data_dir, "first_stage_ever_treated_to_cumulative_lag_outcome_2012_2020.csv"))
+write_csv(results_iv_alleged_lag, file.path(output_data_dir, "iv_alleged_tminus1_cumulative_on_ever_treated_2012_2020.csv"))
+write_csv(results_iv_substantiated_lag, file.path(output_data_dir, "iv_substantiated_tminus1_cumulative_on_ever_treated_2012_2020.csv"))
+
+iv_comparison_lag <- results_iv_alleged_lag %>%
+  rename(
+    Alleged_tminus1_Coef = estimate,
+    Alleged_tminus1_SE = std.error,
+    Alleged_tminus1_t = statistic,
+    Alleged_tminus1_P = p.value
+  ) %>%
+  inner_join(
+    results_iv_substantiated_lag %>%
+      rename(
+        Substantiated_tminus1_Coef = estimate,
+        Substantiated_tminus1_SE = std.error,
+        Substantiated_tminus1_t = statistic,
+        Substantiated_tminus1_P = p.value
+      ),
+    by = "term"
+  ) %>%
+  rename(Variable = term)
+
+write_csv(iv_comparison_lag, file.path(output_data_dir, "iv_comparison_tminus1_cumulative_on_ever_treated_2012_2020.csv"))
+cat("Saved IV lag-outcome outputs to data/clean.\n")
+
+# Weak-IV robust inference for lag-outcome IV via Anderson-Rubin test
+cat("\n=== Weak-IV robust inference (Anderson-Rubin) for lag-outcome IV ===\n")
+beta_grid <- seq(-50, 50, by = 0.1)
+
+ar_alleged_lag <- ar_test_grid(
+  data = iv_data_lag,
+  y_var = "alleged_per_1000_tminus1",
+  x_var = "cumulative_years_compliance",
+  z_var = "EverTreated",
+  beta_grid = beta_grid
+)
+ar_substantiated_lag <- ar_test_grid(
+  data = iv_data_lag,
+  y_var = "substantiated_per_1000_tminus1",
+  x_var = "cumulative_years_compliance",
+  z_var = "EverTreated",
+  beta_grid = beta_grid
+)
+
+ar_alleged_ci <- ar_intervals(ar_alleged_lag, alpha = 0.05)
+ar_substantiated_ci <- ar_intervals(ar_substantiated_lag, alpha = 0.05)
+
+cat("AR 95% confidence set(s), alleged t-1:\n")
+print(ar_alleged_ci)
+cat("AR 95% confidence set(s), substantiated t-1:\n")
+print(ar_substantiated_ci)
+
+write_csv(ar_alleged_lag, file.path(output_data_dir, "ar_grid_alleged_tminus1_2012_2020.csv"))
+write_csv(ar_substantiated_lag, file.path(output_data_dir, "ar_grid_substantiated_tminus1_2012_2020.csv"))
+write_csv(ar_alleged_ci, file.path(output_data_dir, "ar_ci_alleged_tminus1_2012_2020.csv"))
+write_csv(ar_substantiated_ci, file.path(output_data_dir, "ar_ci_substantiated_tminus1_2012_2020.csv"))
+
+ar_summary <- bind_rows(
+  ar_alleged_ci %>% mutate(outcome = "alleged_tminus1"),
+  ar_substantiated_ci %>% mutate(outcome = "substantiated_tminus1")
+) %>% select(outcome, lower, upper)
+
+write_csv(ar_summary, file.path(output_data_dir, "ar_ci_summary_tminus1_2012_2020.csv"))
+cat("Saved AR weak-IV robust outputs to data/clean.\n")
+
 # Visualizations
 # Create scatter plots with regression lines
 p_alleged <- ggplot(merged_panel %>% filter(!is.na(cumulative_years_compliance)), 
@@ -446,10 +1090,3 @@ cat("  - Observations:", nrow(model_substantiated$model), "\n")
 cat("  - R-squared:", round(summary_substantiated_base$r.squared, 4), "\n")
 cat("  - Adjusted R-squared:", round(summary_substantiated_base$adj.r.squared, 4), "\n")
 
-cat("\nScript completed. Outputs saved in data/clean and figures directories.\n")
-cat("\nKey improvements over previous approach:\n")
-cat("  1. Uses panel data (state-year observations) instead of averaging\n")
-cat("  2. Two-way fixed effects (state + year) control for unobserved heterogeneity\n")
-cat("  3. Clustered standard errors at state level account for serial correlation\n")
-cat("  4. Cumulative years of compliance captures cumulative effect over time\n")
-cat("  5. Follows best practices for causal inference with panel data\n")

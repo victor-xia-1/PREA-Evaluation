@@ -47,8 +47,7 @@ state_populations <- data.frame(
   stringsAsFactors = FALSE
 ) %>%
   mutate(
-    population_actual = population_2020 * 1000,
-    population_millions = population_2020 / 1000
+    population_actual = population_2020 * 1000
   )
 
 cat("State population data loaded.\n")

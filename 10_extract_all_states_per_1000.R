@@ -56,61 +56,45 @@ extract_year_data <- function(sheet_name) {
   # Read the sheet without skipping rows first to see structure
   df_raw <- readxl::read_excel(excel_path, sheet = sheet_name, col_names = FALSE)
   
-  # Check if this is the new format (2019-2020) which has counts instead of per 1000
-  is_new_format <- as.integer(sheet_name) >= 2019
+  # All year sheets use old format:
+  # Find "Alleg per 1000" and "Sub per 1000" directly from headers.
+  header_row <- NULL
+  alleged_per_1000_col <- NULL
+  substantiated_per_1000_col <- NULL
   
-  if (is_new_format) {
-    # New format: Find "Alleged" and "Substantiated" in row 12, columns 5-6 (Nonconsensual sexual acts)
-    # Also need prisoners count in column 3
-    header_row <- 12
-    alleged_col <- 5  # Nonconsensual sexual acts - Alleged
-    substantiated_col <- 6  # Nonconsensual sexual acts - Substantiated
-    prisoners_col <- 3
-    
-    cat("Using new format (2019-2020): Alleged in column", LETTERS[alleged_col], 
-        ", Substantiated in column", LETTERS[substantiated_col], 
-        ", Prisoners in column", LETTERS[prisoners_col], "\n")
-  } else {
-    # Old format: Find "Alleg per 1000" and "Sub per 1000"
-    header_row <- NULL
-    alleged_per_1000_col <- NULL
-    substantiated_per_1000_col <- NULL
-    
-    for (i in 1:20) {
-      if (i <= nrow(df_raw)) {
-        # Check all columns in this row for the headers
-        for (j in 1:ncol(df_raw)) {
-          cell_value <- as.character(df_raw[[j]][i])
-          if (!is.na(cell_value)) {
-            cell_lower <- tolower(cell_value)
-            if (str_detect(cell_lower, "alleg.*per.*1000") || str_detect(cell_lower, "alleged.*per.*1000")) {
-              header_row <- i
-              alleged_per_1000_col <- j
-            }
-            if (str_detect(cell_lower, "sub.*per.*1000") || str_detect(cell_lower, "substantiated.*per.*1000")) {
-              if (is.null(header_row)) header_row <- i
-              substantiated_per_1000_col <- j
-            }
+  for (i in 1:20) {
+    if (i <= nrow(df_raw)) {
+      # Check all columns in this row for the headers
+      for (j in 1:ncol(df_raw)) {
+        cell_value <- as.character(df_raw[[j]][i])
+        if (!is.na(cell_value)) {
+          cell_lower <- tolower(cell_value)
+          if (str_detect(cell_lower, "alleg.*per.*1000") || str_detect(cell_lower, "alleged.*per.*1000")) {
+            header_row <- i
+            alleged_per_1000_col <- j
+          }
+          if (str_detect(cell_lower, "sub.*per.*1000") || str_detect(cell_lower, "substantiated.*per.*1000")) {
+            if (is.null(header_row)) header_row <- i
+            substantiated_per_1000_col <- j
           }
         }
-        if (!is.null(header_row) && !is.null(alleged_per_1000_col) && !is.null(substantiated_per_1000_col)) {
-          break
-        }
+      }
+      if (!is.null(header_row) && !is.null(alleged_per_1000_col) && !is.null(substantiated_per_1000_col)) {
+        break
       }
     }
-    
-    if (is.null(alleged_per_1000_col) || is.null(substantiated_per_1000_col)) {
-      cat("Could not find required headers in", sheet_name, "\n")
-      return(data.frame(year = integer(), state = character(), alleged_per_1000 = double(), substantiated_per_1000 = double()))
-    }
-    
-    alleged_col <- alleged_per_1000_col
-    substantiated_col <- substantiated_per_1000_col
-    prisoners_col <- NULL  # Not needed for old format
-    
-    cat("Found 'Alleg per 1000' in column", LETTERS[alleged_col], 
-        "and 'Sub per 1000' in column", LETTERS[substantiated_col], "at row", header_row, "\n")
   }
+  
+  if (is.null(alleged_per_1000_col) || is.null(substantiated_per_1000_col)) {
+    cat("Could not find required headers in", sheet_name, "\n")
+    return(data.frame(year = integer(), state = character(), alleged_per_1000 = double(), substantiated_per_1000 = double()))
+  }
+  
+  alleged_col <- alleged_per_1000_col
+  substantiated_col <- substantiated_per_1000_col
+  
+  cat("Found 'Alleg per 1000' in column", LETTERS[alleged_col], 
+      "and 'Sub per 1000' in column", LETTERS[substantiated_col], "at row", header_row, "\n")
   
   # Extract all state data
   results <- list()
@@ -124,21 +108,9 @@ extract_year_data <- function(sheet_name) {
       
       # Only process if it's one of our 50 states + DC
       if (state_name %in% states_50_dc) {
-        if (is_new_format) {
-          # Calculate per 1000 from counts
-          alleged_count <- as_numeric_safely(df_raw[[alleged_col]][i])
-          substantiated_count <- as_numeric_safely(df_raw[[substantiated_col]][i])
-          prisoners <- as_numeric_safely(df_raw[[prisoners_col]][i])
-          
-          alleged_per_1000 <- ifelse(!is.na(prisoners) && prisoners > 0, 
-                                    (alleged_count / prisoners) * 1000, NA_real_)
-          substantiated_per_1000 <- ifelse(!is.na(prisoners) && prisoners > 0, 
-                                          (substantiated_count / prisoners) * 1000, NA_real_)
-        } else {
-          # Already in per 1000 format
-          alleged_per_1000 <- as_numeric_safely(df_raw[[alleged_col]][i])
-          substantiated_per_1000 <- as_numeric_safely(df_raw[[substantiated_col]][i])
-        }
+        # Already in per 1000 format
+        alleged_per_1000 <- as_numeric_safely(df_raw[[alleged_col]][i])
+        substantiated_per_1000 <- as_numeric_safely(df_raw[[substantiated_col]][i])
         
         results[[length(results) + 1]] <- data.frame(
           year = as.integer(sheet_name),
