@@ -17,6 +17,16 @@ data/clean/*
 # Output figures (can be regenerated)
 figures/*
 !figures/.gitkeep
+# GitHub Pages: Plotly/htmlwidgets deps for heatmaps + key PNGs (heatmap HTML un-ignored after *.html)
+!figures/heatmap_substantiated_inmate_on_inmate_2012_2020_files/
+!figures/heatmap_substantiated_inmate_on_inmate_2012_2020_files/**
+!figures/heatmap_alleged_inmate_on_inmate_2012_2020_files/
+!figures/heatmap_alleged_inmate_on_inmate_2012_2020_files/**
+!figures/regression_alleged_panel_twfe_cumulative_2012_2020.png
+!figures/regression_substantiated_panel_twfe_cumulative_2012_2020.png
+!figures/substantiated_per_1000_by_cumulative_compliance_group_2012_2020.png
+!figures/heatmap_substantiated_inmate_on_inmate_2012_2020.png
+!figures/heatmap_alleged_inmate_on_inmate_2012_2020.png
 
 # Temporary files
 *.tmp
@@ -29,6 +39,9 @@ Thumbs.db
 
 # HTML outputs (can be regenerated)
 *.html
+!index.html
+!figures/heatmap_substantiated_inmate_on_inmate_2012_2020.html
+!figures/heatmap_alleged_inmate_on_inmate_2012_2020.html
 
 # LaTeX outputs
 *.aux
