@@ -63,20 +63,29 @@ cat("Static heatmap saved to:", file.path(output_fig_dir, "heatmap_alleged_inmat
 # Create interactive heatmap using plotly
 cat("\nCreating interactive heatmap...\n")
 
-# Prepare data for heatmap - create matrix
+# Match static ggplot y-order: reorder(state, -alleged_per_1000, mean)
+# ggplot puts first factor level at the bottom (highest mean); last at top (lowest mean).
+# Plotly heatmap draws z[1,] at the top by default, so row 1 = lowest mean (rev of level order).
 years <- sort(unique(alleged_data$year))
-states <- sort(unique(alleged_data$state))
+years_chr <- as.character(years)
+states_by_mean_desc <- levels(
+  reorder(
+    factor(alleged_data$state, levels = sort(unique(alleged_data$state))),
+    -alleged_data$alleged_per_1000,
+    mean,
+    na.rm = TRUE
+  )
+)
+states_plotly_rows <- rev(states_by_mean_desc)
 
-# Create matrix
-year_matrix <- matrix(NA, nrow = length(states), ncol = length(years))
-rownames(year_matrix) <- states
-colnames(year_matrix) <- years
+year_matrix <- matrix(NA_real_, nrow = length(states_plotly_rows), ncol = length(years))
+rownames(year_matrix) <- states_plotly_rows
+colnames(year_matrix) <- years_chr
 
-# Fill matrix
-for (i in 1:nrow(alleged_data)) {
-  state_idx <- which(rownames(year_matrix) == alleged_data$state[i])
-  year_idx <- which(colnames(year_matrix) == as.character(alleged_data$year[i]))
-  if (length(state_idx) > 0 && length(year_idx) > 0) {
+for (i in seq_len(nrow(alleged_data))) {
+  state_idx <- match(alleged_data$state[i], rownames(year_matrix))
+  year_idx <- match(as.character(alleged_data$year[i]), colnames(year_matrix))
+  if (!is.na(state_idx) && !is.na(year_idx)) {
     year_matrix[state_idx, year_idx] <- alleged_data$alleged_per_1000[i]
   }
 }
@@ -117,7 +126,7 @@ layout(
   yaxis = list(
     title = "State",
     categoryorder = "array",
-    categoryarray = rev(states)
+    categoryarray = states_plotly_rows
   ),
   margin = list(l = 120, r = 50, t = 80, b = 50)
 ) %>%
