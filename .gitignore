@@ -36,6 +36,7 @@ Thumbs.db
 
 # PDFs (if you have large PDF files)
 *.pdf
+!Honors_Thesis_Paper.pdf
 
 # HTML outputs (can be regenerated)
 *.html
